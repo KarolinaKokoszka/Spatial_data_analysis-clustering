@@ -1,0 +1,259 @@
+---
+title: "Kokoszka_Karolina_3_projekt1.R"
+author: "Karolina Kokoszka"
+date: "2024-11-24"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+library(sf)       
+library(dbscan)   
+library(ggplot2)  
+library(dplyr) 
+base_path<-"C:/Users/Marcin/OneDrive - Hauraton GmbH & Co. KG/Dokumente/STUDIA/SEMESTR V/"
+```
+
+```{r}
+# wczytanie danych 
+osiedla <- st_read(paste0(base_path,"AnalizaDanychPrzestrzennych/cwiczenia/lab5_projekt/osiedla.shp"))
+
+punkty <- st_read(paste0(base_path,"AnalizaDanychPrzestrzennych/cwiczenia/lab6/zestaw3v2_XYTableToP_Project.shp"))
+
+# wyodrębnienie współrzędnych punktów 
+pt_coords <- st_coordinates(punkty)
+```
+
+# Funkcja do wyznaczania osiedli/dzielnic w których wyznaczono klastry
+```{r}
+find_cluster_osiedla <- function(punkty, osiedla) {
+
+  # przecięcie punktów klastrów z warstwą osiedli
+  intersected_osiedla <- st_intersection(punkty, osiedla)
+  
+  # wyodrębnienie unikalnych nazw osiedli
+  unique_osiedla <- intersected_osiedla %>%
+    distinct(NAZWA_JEDN) %>%
+    pull(NAZWA_JEDN)
+  
+  print("Osiedla, w których wyznaczono klastry:")
+  print(unique_osiedla)
+}
+```
+
+
+# ALGORYTM DBSCAN (Density-Based Spatial Clustering of Applications with Noise) 
+
+To algorytm klasteryzacji oparty na gęstości, który identyfikuje klastry na podstawie zagęszczenia punktów w przestrzeni.
+
+ZASADA DZIAŁANIA:
+
+->Obliczanie sąsiadów każdego punktu i identyfikowanie punktów rdzeniowych (punkty które w sąsiedstwie eps mają minPts punktów)
+
+->Tworzenie klastrów przez połączenie sąsiednich punktów punktu rdzeniowego (punkty wsąsiedstwie eps - punkty bezpośrednio osiągalne z rdzenia lub punkty graniczne)
+
+->Proces rozszerzania klastra - wykonanie dla każdego punktu nierdzeniowego:
+
+  - dodanie do sąsiedniego punktu rdzenia, jeśli to możliwe (spełnia kryterium)
+  
+  - W przeciwnym razie dodanie do szumu (punkty odstające)
+
+
+ZALETY:
+
+- nie wymaga określenia liczby klastrów a priori
+
+-może wykrywać klastry o dowolnych kształtach
+
+- wyodrębnia  szum i jest odporny na wartości odstające
+
+- wymaga tylko dwóch parametrów i jest w większości przypadków niewrażliwy na kolejność punktów
+
+
+WADY:
+
+- wrażliwy na wybór parametrów eps i minPts (źle dobrane mogą prowadzić do błędów w klasteryzacji)
+
+- nie klasteryzuje dobrze danych o dużych różnicach gęstości (nie da się wówczas odpowiednio dobrać kombinacji minPts-ε dla wszystkich klastrów)
+
+- dla danych wielowymiarowych odległość euklidesowa, może być mało skuteczna (problem klątwy wymiarowości)
+
+- nie jest całkowicie deterministyczny (w przypadku punktów granicznych, które sa osiagalne z więcej niż jednego klastra, ich przynależność zależy wówczas od kolejności przetwarzania danych)
+
+# Funkcja do generowania mapy DBSCAN
+```{r}
+create_dbscan_map <- function(punkty,pt_coords, osiedla, eps, minPts) {
+  # DBSCAN
+  db <- dbscan(pt_coords, eps = eps , minPts = minPts)
+  
+  # dodanie wyników do zbioru danych (punkty)
+  punkty$dbscan_cluster <- as.factor(db$cluster)  # klastry jako kolumna w danych punktowych
+  
+  # usunięcie i wyodrębnienie szumu 
+  punkty_bez_szumu <- punkty %>% filter(dbscan_cluster != 0)
+  szum <- punkty %>% filter(dbscan_cluster == 0)
+  
+  find_cluster_osiedla(punkty_bez_szumu,osiedla)
+  
+  # generowanie mapy
+  ggplot() +
+    geom_sf(data = osiedla, fill = "white", color = "black") +
+    geom_sf(data = punkty_bez_szumu, aes(color = dbscan_cluster), size = 1.5) +
+    labs(title = paste("DBSCAN: eps =", eps, ", minPts =", minPts, ", szum-półprzeźroczysty szary"),
+         color = "Cluster") +
+    geom_sf(data = szum, col = "grey", size = 1.5, alpha = 0.3) +  
+    theme_minimal()
+}
+```
+
+# DBSCAN 1
+```{r}
+eps1 <- 400 #promień otoczenia w którym sprawdzamy ilość sąsiadów
+minPts1 <- 10 #minimalna ilość punktów które muszą tworzyć klaster
+create_dbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, eps = eps1, minPts = minPts1)
+```
+
+# DBSCAN 2 - zmniejszone eps
+```{r}
+eps2 <- 200 
+minPts2 <- 10
+create_dbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, eps = eps2, minPts = minPts2)
+
+#zmniejszenie eps (zbyt mała wartość) spowodowało, że:
+#-duża ilość punktów jest traktowana jako szum
+#-klasteryzacja tworzy za dużo małych klastrów
+```
+
+# DBSCAN 3 - zwięksozne eps
+```{r}
+eps3 <- 700 
+minPts3 <- 10
+create_dbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, eps = eps3, minPts = minPts3)
+
+# zwiększenie eps (zbyt duza wartość) spowodowało, że:
+#-większość danych zostaje zgrupowana w jeden duży klaster
+#-mala ilość punktów zakwalifikowanych jako szum
+#-klasteryzacja przestaje być użyteczna, ponieważ większość punktow są traktowane jako jeden zbiór
+```
+
+# DBSCAN 4 - zmniejszone minPts
+```{r}
+eps4 <- 400
+minPts4 <- 4
+create_dbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, eps = eps4, minPts = minPts4)
+
+# zmniejszenie minPts (zbyt mała wartość) spowodowało, że:
+#-tworzy się wiele małych klastrów, z których część może być nieistotna i może być to szum
+#-punktów szumu może być zbyt mało
+```
+
+# DBSCAN 5 - zwiększone minPts
+```{r}
+eps5 <- 400
+minPts5 <- 16
+create_dbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, eps = eps5, minPts = minPts5)
+
+# zwiekszenie minPts (zbyt duża wartość) spowodowało, że:
+#-wiele punktów nie spełnia wymogu minimalnej liczby sąsiadów, przez co powstał zbyt duży szum
+#-liczba klastrów jest zbyt mała
+```
+
+
+# ALGORYTM HDBSCAN (Hierarchical Density-Based Spatial Clustering of Applications with Noise) 
+
+To algorytm będący rozwinięciem algorytmu DBSCAN
+
+ZASADA DZIAŁANIA:
+
+aspekt hierarchiczny -> zamiast jednej wartości eps, HDBSCAN tworzy hierarchię klastrów, zaczynając od małych gęstych obszarów i stopniowo je łącząc w większe
+
+->Obliczanie odległości wzajemnej osiągalności między punktami (na podstawie odległości i odległości rdzenia)
+
+->Na podstawie obliczonej odległości wzajemnej osiągalności, konstruowane jest drzewo rozpinające sąsiedztwa między punktami
+
+->Wykorzystanie hierarchi klastrów do identyfikacji stabilnych klastrów o zmiennej gęstości, elminacja słabo stabilnych klastrów 
+
+->Punkty należące do niestabilnych klastrów mogą byc:
+
+  - przypisane do szumu,jeśli nie spełniają minimalnych kryteriów klasteryzacji
+  
+  - przypisane do innych klastrów, jeśli są osiągalne z punktów rdzeniowych w stabilnym klastrze
+
+
+ZALETY:
+
+- nie jest konieczne wartości parametru eps (dostosowywuje się do zmiennej gęstości danych)
+
+- lepiej niż DBSCAN klasteryzuje dane o dużych różnicach gęstości
+
+- wyodrębnia szum
+
+- wykrywa bardziej stabilne i wiarygodne klastry dzięki hierarchicznemu podejściu (usuwając niestabilne klastry minimalizuje ryzyko nadmiernego dopasowania)
+
+
+WADY:
+
+- jest bardziej złożony obliczeniowo niż DBSCAN
+
+- może być bardziej wrażliwy na dane szumowe niż DBSCAN, jeśli parametry są źle dobrane
+
+- niewłaściwy dobór parametru minPts może prowadzić do błędnych wyników klasteryzacj
+
+# Funkcja do generowania mapy HDBSCAN
+```{r}
+create_hdbscan_map <- function(punkty,pt_coords, osiedla, minPts) {
+  # HDBSCAN
+  hdb <- hdbscan(pt_coords, minPts = minPts)
+  
+  # dodanie wyników do zbioru danych (punkty)
+  punkty$hdbscan_cluster <- as.factor(hdb$cluster) # klastry jako kolumna w danych punktowych
+  
+  # usunięcie i wyodrębnienie szumu 
+  punkty_bez_szumu <- punkty %>% filter(hdbscan_cluster != 0)
+  szum <- punkty %>% filter(hdbscan_cluster == 0)
+  
+  find_cluster_osiedla(punkty_bez_szumu,osiedla)
+  
+  # generowanie mapy
+  ggplot() +
+    geom_sf(data = osiedla, fill = "white", color = "black") +
+    geom_sf(data = punkty_bez_szumu, aes(color = hdbscan_cluster), size = 1.5) +
+    labs(title = paste("HDBSCAN: minPts =", minPts, ", szum-półprzeźroczysty szary"),
+         color = "Cluster") +
+    geom_sf(data = szum, col = "grey", size = 1.5, alpha = 0.1) +  
+    theme_minimal()
+
+}
+```
+
+# HDBSCAN 1 
+```{r}
+minPts_h1 <- 30
+create_hdbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, minPts = minPts_h1)
+
+# przy tak dobranej wartości minPts do klastrów zostały zakwalfikowane punkty znajdujace się w dużych skupiskach, wiele punktów zostało zakwalfikowanych jako szum
+```
+
+# HDBSCAN 2 
+```{r}
+minPts_h2 <-15
+create_hdbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, minPts = minPts_h2)
+
+# przy tak dobranej wartości minPts zwiększyła się liczba klastrówi (niektóre klastry zostały utworzone z punktów znajdujących się poza głównymi skupiskami) i lekko zmniejszył się szum 
+```
+
+# HDBSCAN 3
+```{r}
+minPts_h3 <- 6
+create_hdbscan_map(punkty=punkty, pt_coords = pt_coords, osiedla = osiedla, minPts = minPts_h3)
+
+# źle dobana wartosć minPts spowodowała, że większość danych zostaje zgrupowana w jeden duży klaster oraz mala ilość punktów należy do szum
+```
+
+# WNIOSKI
+Jeśli skupiamy się na analizie obszarów o różnej gęstości (np. centrum miasta i obrzeża), HDBSCAN wydaje się być bardziej odpowiednim algorytmem dzięki zdolności adaptacji do lokalnej gęstości(natomiast HDBSCAN jest trudniejszy w diagnozowaniu problemów z parametrami).
+W przypadku DBSCAN należy eksperymentalnie dostroić eps i minPts w taki sposób, aby uwzględniały różnice w rozkładzie punktów między centrum a obrzeżami.
+
+
+Na podstawie otrzymanych wyników, można stwierdzić, że najwięcej zarejestrowanych wykroczń występuje w rejonie Starego Miasta i jego okolicach (dzielnice Krowodrza i Grzegórzki), a następnie okolice Mistrzejowic i Bieńczyc.
